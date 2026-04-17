@@ -1,0 +1,1070 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{microtype}
+\usepackage{cite}
+\usepackage{url}
+\usepackage{skak}        % chess symbols
+\usepackage{chessboard}  % board diagrams from FEN
+
+% Allow line breaks at underscores and dots in \texttt
+\renewcommand{\texttt}[1]{%
+  \begingroup\ttfamily\hyphenchar\font=`\-\relax
+  \def\_{\textunderscore\discretionary{}{}{}}%
+  #1\endgroup}
+
+% Global stretch to prevent overfull boxes from long identifiers
+\emergencystretch=3em
+
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{corollary}[theorem]{Corollary}
+\theoremstyle{definition}
+\newtheorem{definition}[theorem]{Definition}
+\newtheorem{finding}[theorem]{Finding}
+\theoremstyle{remark}
+\newtheorem{remark}[theorem]{Remark}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  keywordstyle=\color{blue},
+  commentstyle=\color{gray},
+  breaklines=true,
+  frame=single,
+  xleftmargin=1em,
+  escapeinside={(*}{*)},
+}
+
+\title{Yanasse: Finding New Proofs from Deep Vision's Analogies\\[0.5em]
+\large Part~3: Probability Theory $\to$ Condensed Mathematics}
+\author{Alexandre Linhares\thanks{alexandre@linhares.ltd. Affiliations: Getulio Vargas Foundation and ARGO LABS}}
+\date{April 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This is Part~3 of the Yanasse series, applying cross-area tactic
+transfer to the pair \textsc{Probability}~$\to$~\textsc{Condensed}.  Condensed mathematics---the sheaf-theoretic
+framework of Clausen and Scholze that replaces point-set
+topology---is structurally the most distant target tested so far:
+it was designed to \emph{eliminate} the filter-based and
+$\sigma$-algebra-based vocabulary on which probability-theory
+tactics depend.
+
+The method produces 2~Lean-verified new proofs out of 10 transfer
+attempts (20\%), the lowest success rate in the series.  Both
+proofs target the same theorem---the triangle identity of the
+adjunction between condensed sets and topological spaces
+(\texttt{topCatAdjunction.left\_triangle\_components})---and both
+transfer the ``go pointwise'' pattern that probability theory uses
+to reduce equalities of structured objects (kernels, random
+variables) to per-element obligations.
+
+The central finding is a \emph{strictly better proof}: the
+transferred tactic \texttt{congr with x} replaces \texttt{ext}
+\emph{without} requiring the
+\texttt{set\_option backward.isDefEq.respectTransparency false}
+workaround that the existing Mathlib proof needs.  This is not a
+paraphrase of the original proof but a genuine improvement enabled
+by cross-area transfer.  The remaining 8~schemas all fail for a
+common root cause: condensed mathematics systematically avoids the
+type-theoretic structures (filters, $\sigma$-algebras, conditional
+definitions, \texttt{CanLift} instances) that probability-theory
+tactics operate on.
+
+Cross-pair comparison across all three target areas confirms a
+sharp dichotomy: schemas that interact with measure-theoretic
+\emph{types} never transfer; schemas that operate on
+\emph{proof architecture} (decomposition, case-split, congruence)
+transfer when the target has compatible goal shapes.
+\end{abstract}
+
+\newpage
+\tableofcontents
+\newpage
+
+%======================================================================
+\section{Introduction}\label{sec:intro}
+%======================================================================
+
+Parts~1 and~2 of this series~\cite{yanasse_part1, yanasse_part2}
+demonstrated cross-area tactic transfer at a 40\% schema success
+rate on Probability $\to$ Representation Theory and Probability
+$\to$ Set Theory alike.  Both target areas, while
+mathematically distant from probability, share a common property:
+they use the standard vocabulary of Lean's type theory---equalities,
+inequalities, type-class instances---in ways that probability-theory
+proof patterns can engage with.
+
+This paper tests the method against a fundamentally different
+target.  Condensed mathematics, developed by Clausen and
+Scholze~\cite{scholze_condensed_2019, clausen_scholze_complex_2022},
+replaces point-set topology with a sheaf-theoretic framework: a
+condensed set is a sheaf on the category of compact Hausdorff
+spaces.  The theory was designed precisely to avoid the categorical
+deficiencies of topological spaces (the category $\mathbf{Top}$
+lacks exactness properties), and in doing so it eliminates the
+filter-based and measure-theoretic vocabulary that probability-theory
+tactics depend on.  This makes \textsc{Condensed} the hardest
+target in the Yanasse series: every domain-gated schema faces not
+just an unfamiliar target but an \emph{actively hostile} one.
+
+The Lean formalization of condensed mathematics in
+Mathlib~\cite{asgeirsson_condensed_2024, asgeirsson_discrete_2024}
+is comparatively young: 189~extracted proof states across 33~files,
+versus 672 for Representation Theory and 2{,}076 for Set Theory.
+This small pool increases the risk of QAP score saturation (multiple
+targets tied at the same score) and limits the diversity of available
+target theorems.
+
+\subsection{Overview of the Deep Vision framework}
+
+The Deep Vision framework~\cite{linhares_deep_vision,
+linhares2024deepvision}, growing out of the Fluid Analogies Research
+Group tradition~\cite{hofstadter_fluid_1995, hofstadter_go_1999,
+hofstadter_surfaces_2013}, represents any structured domain as a
+\emph{relational network}: entities connected by typed, directed
+relations.  An analogy optimization finds the entity permutation that
+maximizes relational consistency between two networks.  The matching
+code (\texttt{deep\_vision\_lib.py}) is entirely domain-independent:
+it receives two relational structures and returns a similarity score
+and entity correspondence, without knowing which domain it is
+processing.
+
+\paragraph{Chess analogies.}  In chess~\cite{linhares_active_2005,
+linhares_understanding_2007, linhares_questioning_2010,
+linhares_entanglement_2012, linhares_what_2013,
+linhares_emergence_2014}, entities are pieces and relations are attack,
+defense, blocking, confinement, and pinning.  Two pieces in entirely
+different positions can play ``the same role'' if their relational
+profiles match.
+
+\paragraph{From chess to proofs.}  The same matching engine, with only
+the relation extractor swapped, handles Lean~4 proof states: entities
+become hypotheses, goals, and types; relations become rewrite,
+fit/apply, head-match, structure, equality, reflexive, witness,
+bidirectional, kernel/simp, decidable, and lemma-needed (14 relation
+types).  The proof-state matcher has previously been
+used to discover a formal proof of Wolstenholme's
+theorem~\cite{linhares_wolstenholme_2026} in Lean~4
+(see also~\cite{linhares_sketch_2026}).
+
+\subsection{Results preview}
+
+Applying the method to Probability $\to$ Condensed produces:
+
+\begin{itemize}
+\item 2 Lean-verified new proofs from 2 successful schema transfers
+  out of 10 attempts (20\% transfer success rate).
+\item A \emph{strictly better proof}: the transferred
+  \texttt{congr with x} avoids a transparency workaround
+  (\texttt{set\_option}) that the existing Mathlib proof requires
+  (Section~\ref{sec:proof1}).
+\item A paradigm-incompatibility diagnosis: 8 of 10 schemas fail
+  because condensed mathematics systematically eliminates the
+  type-theoretic structures they require
+  (Section~\ref{sec:failures}).
+\item Three-way cross-pair comparison across all target areas tested
+  so far (Section~\ref{sec:cross_pair}).
+\end{itemize}
+
+%======================================================================
+\section{Methodology}\label{sec:method}
+%======================================================================
+
+The methodology is identical to Parts~1 and~2~\cite{yanasse_part1,
+yanasse_part2}.  We summarize the pipeline and note the parameters
+specific to this pair.
+
+\subsection{Pipeline summary}
+
+\begin{enumerate}
+\item \textbf{Schema extraction.}  Parse the Mathlib proof-state
+  corpus (217{,}133 entries).  Each tactic invocation becomes a schema
+  tuple $(\textit{head}, \textit{arity}, \textit{has\_with},
+  \textit{uses\_lemma})$.
+
+\item \textbf{$z$-score ranking.}  For each (area, schema) pair,
+  compute the $z$-score of the schema's frequency across 27 areas.
+  A schema with $z \geq +2$ in the source and $z \leq -1$ (or absent)
+  in the target is a transfer candidate.
+
+\item \textbf{GPU-accelerated analogy matching.}  Sample 8 source
+  proofs per schema, match each against all 189 Condensed proof
+  states using the \texttt{BatchMatcher} on MPS.  Retain the top-5
+  target analogues by normalized score.
+
+\item \textbf{Semantic adaptation.}  A fresh AI reasoning session
+  (Claude Opus, 50-minute budget) adapts the source tactic's
+  \emph{mathematical strategy}---not its syntax---to the target
+  theorem.
+
+\item \textbf{Lean verification.}  The adapted proof is compiled
+  with \texttt{lake env lean}.  Exit code~0 with no \texttt{sorry}
+  constitutes verification.
+\end{enumerate}
+
+\subsection{Pair-specific parameters}
+
+\begin{itemize}
+\item \textbf{Source:} \texttt{Mathlib.Probability} (30{,}384 tactic
+  invocations, the largest Mathlib area).
+\item \textbf{Target:} \texttt{Mathlib.Condensed} (189 proof
+  states---the smallest target pool in the series, ${\sim}9\times$
+  smaller than Set Theory and ${\sim}3.5\times$ smaller than
+  Representation Theory).
+\item \textbf{Matching cost:} $8 \times 189 = 1{,}512$
+  individual analogy computations per schema, completing in
+  approximately 2--10~minutes on MPS---significantly faster
+  than the previous pairs due to the smaller pool.
+\item \textbf{Top-10 transfer candidates} (by gap score):
+  \texttt{filter\_upwards}, \texttt{congr\,with}, \texttt{fun\_prop}
+  (as \texttt{all\_goals fun\_prop}), \texttt{ext1},
+  \texttt{lift}, \texttt{any\_goals},
+  \texttt{measurability}, \texttt{by\_cases}, \texttt{congrm},
+  \texttt{split\_ifs}.
+\end{itemize}
+
+Note the substitutions relative to previous pairs:
+\texttt{all\_goals fun\_prop} replaces bare \texttt{fun\_prop}
+(the full combinator, not just the inner tactic, is the
+actual source pattern), and \texttt{split\_ifs} replaces
+\texttt{push} (the next-highest-gap schema for this target).
+
+%======================================================================
+\section{The Target: Condensed Mathematics}\label{sec:target}
+%======================================================================
+
+A \emph{condensed set} is a sheaf of sets on the category
+$\mathbf{CompHaus}$ of compact Hausdorff spaces equipped with the
+coherent topology~\cite{scholze_condensed_2019}.  The functor
+\[
+  T \colon \mathbf{Top} \longrightarrow \mathbf{CondSet},
+  \qquad
+  X \longmapsto \bigl(S \mapsto \mathrm{Cont}(S, X)\bigr)
+\]
+embeds topological spaces into condensed sets, and admits a left
+adjoint
+\[
+  U \colon \mathbf{CondSet} \longrightarrow \mathbf{Top}
+\]
+that recovers the ``underlying topological space'' of a condensed
+set.  The adjunction $U \dashv T$ is the categorical backbone of the
+Mathlib formalization~\cite{asgeirsson_condensed_2024}: its unit
+$\eta \colon \mathrm{Id} \Rightarrow T \circ U$ and counit
+$\varepsilon \colon U \circ T \Rightarrow \mathrm{Id}$ satisfy the
+triangle identities
+\begin{equation}\label{eq:triangle}
+  \varepsilon_{T(X)} \circ T(\eta_X) = \mathrm{id}_{T(X)},
+  \qquad
+  U(\varepsilon_Y) \circ \eta_{U(Y)} = \mathrm{id}_{U(Y)}.
+\end{equation}
+
+Both new proofs in this paper target the second identity
+(Equation~\ref{eq:triangle}, right), formalized in Mathlib as
+\texttt{topCatAdjunction.left\_triangle\_components}.
+
+\paragraph{Why condensed math is hard to reach from probability.}
+The Clausen--Scholze framework was designed to replace filter-based
+topology---the very vocabulary that probability theory's most
+characteristic tactics (\texttt{filter\_upwards},
+\texttt{measurability}, \texttt{fun\_prop}) operate on---with
+sheaf-theoretic conditions.  Condensed proofs reason about
+\emph{functors}, \emph{natural transformations}, and
+\emph{adjunctions}, not about $\sigma$-algebras, filters, or
+conditional definitions.  This makes the pair a stress test for
+cross-area transfer: any success must come from proof patterns
+that transcend the measure-theoretic vocabulary.
+
+The Mathlib formalization draws on the work of
+Asgeirsson~\cite{asgeirsson_condensed_2024, asgeirsson_discrete_2024},
+building on the foundations laid by the Liquid Tensor
+Experiment~\cite{scholze_liquid_2020, commelin_lte_2022}, which
+formalized Scholze's theorem on liquid vector spaces in Lean and
+demonstrated that condensed mathematics could be made fully
+rigorous in a proof assistant.
+
+%======================================================================
+\section{Results: Probability $\to$ Condensed}\label{sec:results}
+%======================================================================
+
+\begin{table}[h]
+\centering\small
+\caption{Transfer results for Probability $\to$ Condensed.}
+\label{tab:results}
+\begin{tabular}{@{}clcccp{4.5cm}@{}}
+\toprule
+Item & Schema head & \texttt{with} & Ar.\ & Result & Adaptation \\
+\midrule
+20 & \texttt{filter\_upwards} & \checkmark & 1 & Failed & Paradigm gap (no Filter API) \\
+21 & \texttt{congr} & \checkmark & 0 & \textbf{New proof} & \texttt{congr with x} (no \texttt{set\_option}) \\
+22 & \texttt{ext1} & & 1 & \textbf{New proof} & \texttt{ext1 x} (named variable) \\
+23 & \texttt{all\_goals} & & 1 & Failed & No multi-goal sites \\
+24 & \texttt{lift} & \checkmark & 5 & Failed & No \texttt{CanLift} instances \\
+25 & \texttt{any\_goals} & & 1 & Failed & Single sequential goal \\
+26 & \texttt{measurability} & & 0 & Failed & No $\sigma$-algebra predicates \\
+27 & \texttt{by\_cases} & & 4 & Failed & No conditional definitions \\
+28 & \texttt{congrm} & & 5 & Failed & No shared outer operators \\
+29 & \texttt{split\_ifs} & & 0 & Failed & Zero \texttt{ite}/\texttt{dite} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent Two transfer attempts succeeded, both targeting the same
+theorem: the left triangle identity of the condensed-set/topological-space
+adjunction (\texttt{topCatAdjunction.left\_triangle\_components}).
+
+\subsection{New proof P1: \texttt{congr with x} replaces \texttt{ext}
+  without transparency workaround}\label{sec:proof1}
+
+\paragraph{Theorem.}
+For a condensed set $Y$, the triangle identity
+\[
+  U(\varepsilon_Y) \circ \eta_{U(Y)} = \mathrm{id}_{U(Y)}
+\]
+holds in $\mathbf{Top}$, where $U$ = \texttt{condensedSetToTopCat},
+$\eta$ = \texttt{topCatAdjunctionUnit}, and
+$\varepsilon$ = \texttt{topCatAdjunctionCounit}.
+
+\paragraph{Context.}
+The triangle identities are the defining equations of an
+adjunction~\cite{mac_lane_categories_1998}.  In the condensed
+setting, they encode the fact that the ``condensify then
+topologize'' round-trip is coherent: applying the unit and then
+the counit (or vice versa) recovers the identity.  The Mathlib
+formalization follows
+Asgeirsson~\cite{asgeirsson_condensed_2024, asgeirsson_discrete_2024},
+who developed the condensed-set infrastructure building on the
+Liquid Tensor Experiment~\cite{scholze_liquid_2020, commelin_lte_2022}.
+The specific theorem \texttt{left\_triangle\_components} appears in
+\texttt{Mathlib.Condensed.TopCatAdjunction}, one of the core files
+establishing the $U \dashv T$ adjunction.
+
+\paragraph{The existing Mathlib proof.}
+The current proof requires a global transparency override:
+\begin{lstlisting}
+set_option backward.isDefEq.respectTransparency false in
+theorem left_triangle_components :
+    condensedSetToTopCat.map (topCatAdjunctionUnit Y) (*$\gg$*)
+      topCatAdjunctionCounit Y.toTopCat = (*$\mathbb{1}$*) _ := by
+  ext
+  change Y.obj.map ((*$\mathbb{1}$*) _) x = x
+  simp
+\end{lstlisting}
+Without \texttt{set\_option backward.isDefEq.respectTransparency
+false}, the \texttt{ext}-based proof fails: \texttt{ext} applies
+the registered \texttt{@[ext]} lemma for \texttt{TopCat.Hom},
+which leaves the goal in a form that interacts poorly with Lean's
+backward definitional-equality transparency settings.
+
+\paragraph{New proof (congr with x).}
+The transferred tactic replaces \texttt{ext} with
+\texttt{congr with x}, which operates via congruence closure
+rather than extensionality lemma application:
+\begin{lstlisting}
+-- No set_option needed
+example (Y : CondensedSet.{u}) :
+    condensedSetToTopCat.map (topCatAdjunctionUnit Y) (*$\gg$*)
+      topCatAdjunctionCounit Y.toTopCat = (*$\mathbb{1}$*) _ := by
+  congr with x
+  change Y.obj.map ((*$\mathbb{1}$*) _) x = x
+  simp
+\end{lstlisting}
+
+\paragraph{Why the transfer works.}
+\texttt{congr with x} performs two operations: \texttt{congr}
+recognizes that both sides of the morphism equality share
+the same outermost constructor (\texttt{ContinuousMap.mk}---a
+function paired with a continuity proof) and decomposes accordingly;
+\texttt{with x} introduces a point $x$ in the underlying topological
+space.  The residual goal $Y.\mathtt{obj}.\mathtt{map}\,(\mathbb{1}\
+\_)\,x = x$ follows from the sheaf functoriality axiom via
+\texttt{simp}.
+
+The key difference from \texttt{ext}: congruence closure
+pattern-matches on term structure directly, bypassing the
+extensionality-lemma mechanism that triggers the transparency issue.
+The two tactics achieve the same mathematical decomposition
+(morphism equality $\to$ pointwise equality) via different
+mechanisms, and the congruence route is immune to the
+backward-\texttt{isDefEq} interaction.
+
+\paragraph{Source pattern.}  In
+\texttt{Mathlib.Probability.Gaussian.HasGaussianLaw.Independence},
+the tactic \texttt{congr with i} decomposes an equality of
+characteristic-function products
+$\prod_i \varphi(X_i)(\cdot) = \prod_i \exp(\cdots)$ to
+per-factor equality on the index $i$.  The pattern---``both sides
+share an outermost indexed operator; \texttt{congr} decomposes,
+\texttt{with} names the index''---is the probability-theory
+workhorse for equalities of kernels, expectations, and products.
+
+\paragraph{Cross-pair comparison.}  This is the third target area
+for schema~138 (\texttt{congr with}):
+
+\medskip
+\begin{center}\small
+\begin{tabular}{@{}llll@{}}
+\toprule
+Target & Head transfers? & Modifier transfers? & Net result \\
+\midrule
+RepTheory (Part~1) & No ($\leq$ goal) & Yes (\texttt{rintro})
+  & Adapted proof \\
+SetTheory (Part~2) & No (Cardinal) & Yes (positive controls)
+  & Failed (wrong rank-1) \\
+\textbf{Condensed (Part~3)} & \textbf{Yes} ($=$ on ContinuousMap)
+  & \textbf{Yes} (\texttt{with x})
+  & \textbf{Strictly better proof} \\
+\bottomrule
+\end{tabular}
+\end{center}
+\medskip
+
+\noindent Condensed is the only target where both the head
+(\texttt{congr}) and the modifier (\texttt{with}) transfer directly.
+The reason: the target goal is an equality of morphisms in a
+concrete category (continuous maps between topological spaces),
+which has exactly the constructor-shaped structure that
+\texttt{congr} expects.
+
+Copy-and-pasting the Lean code of the proofs above to Google's
+Gemini LLM with no additional context has yielded:
+
+\begin{quote}
+  That is an excellent refactor!\ Switching from \texttt{ext} to
+  \texttt{congr} is a savvy move.  While \texttt{ext} tries to apply
+  every possible extensionality lemma in the database,
+  \texttt{congr} (congruence) is more targeted---it basically says
+  ``these two sides are the same if their components are the same.''
+  The fact that you were able to remove the \texttt{set\_option}
+  suggests that \texttt{congr} navigated the ``transparency'' of the
+  definitions more effectively than \texttt{ext} did.  In Lean,
+  \texttt{congr} is often better at ``drilling through'' categorical
+  structures because it focuses on the function application rather
+  than just the object type.
+
+  \paragraph{Why this version is ``Clean.''}
+  \begin{description}
+    \item[No Options:] Removing \texttt{set\_option} makes the proof
+      more portable and less likely to cause weird unification behavior
+      in other parts of your file.
+    \item[Targeted:] \texttt{congr with x} is slightly more explicit
+      about what you are identifying than a generic \texttt{ext}.
+    \item[Frugal:] This is a very ``short'' proof for a concept that
+      is mathematically deep (the first triangle identity of an
+      adjunction).
+  \end{description}
+\end{quote}
+
+
+
+
+\subsection{New proof P2: \texttt{ext1 x} with named variable}%
+\label{sec:proof2}
+
+\paragraph{Theorem.}
+Same as P1: \texttt{topCatAdjunction.left\_triangle\_components}.
+
+\paragraph{New proof (ext1 x, three variants).}
+\begin{enumerate}
+\item \textbf{ext1 x + change + simp.}  Identical to the original
+  proof but with \texttt{ext1 x} (named variable) instead of bare
+  \texttt{ext}.  Still requires \texttt{set\_option}.
+\item \textbf{ext1 x + change + simp only.}  Fully explicit lemma
+  list: \texttt{FunctorToTypes.map\_id\_apply},
+  \texttt{condensedSetToTopCat\_obj\_carrier}, etc.
+\item \textbf{ext1 x + change + rw + rfl.}  A rewrite chain
+  mimicking the probability-theory pattern: \texttt{ext1 x} $\to$
+  \texttt{rw [FunctorToTypes.map\_id\_apply]} $\to$ \texttt{rfl}.
+\end{enumerate}
+
+\paragraph{Source pattern.}  In probability, \texttt{ext1\,$\omega$}
+reduces set equality to pointwise membership
+$\forall \omega,\; \omega \in S \leftrightarrow \omega \in T$;
+\texttt{ext1\,a} reduces kernel equality to pointwise measure
+equality $\forall a,\; \kappa_1(a) = \kappa_2(a)$.  The
+arity-1 form (naming the variable) is standard in probability
+because subsequent rewrite chains reference it.
+
+\paragraph{Adaptation.}  \texttt{ext1 x} compiles directly because
+\texttt{TopCat} morphisms have a registered \texttt{@[ext]} lemma.
+The transfer is syntactic (named variable convention), not semantic.
+Unlike P1, this proof still requires the \texttt{set\_option}
+workaround---\texttt{ext1} applies the same extensionality lemma
+as bare \texttt{ext} and triggers the same transparency interaction.
+
+\paragraph{Domain asymmetry.}  In probability, after \texttt{ext1 x},
+the goal is in \emph{rewrite-normal form}: \texttt{simp} lemmas
+(\texttt{map\_apply}, \texttt{prod\_apply}) directly simplify both
+sides.  In condensed math, after \texttt{ext1 x}, the goal passes
+through layered categorical abstractions that are
+\emph{definitionally} but not \emph{rewritably} equal to the
+desired form.  The \texttt{change} tactic bridges this gap by
+asking Lean's kernel to verify the definitional equality.
+
+\paragraph{Relationship to P1.}  P1 (\texttt{congr with x}) is
+strictly stronger: it achieves the same mathematical decomposition
+without the \texttt{set\_option} workaround.  P2 (\texttt{ext1 x})
+demonstrates that the probability naming convention transfers, but
+the proof is not improved.
+
+%======================================================================
+\section{Cross-Pair Comparison: Three Target Areas}%
+\label{sec:cross_pair}
+%======================================================================
+
+With three pairs of the Yanasse Project completed, we can compare schema behavior across
+three structurally different target areas.  Seven schemas were tested
+in all three areas (Table~\ref{tab:cross_three}).
+
+\begin{table}[h]
+\centering\small
+\caption{Schema transfer results across three target areas.
+  \checkmark = new proof; $\times$ = failed.}
+\label{tab:cross_three}
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+Schema head & RepTheory & SetTheory & Condensed & Pattern \\
+\midrule
+\texttt{filter\_upwards}
+  & \checkmark & $\times$ & $\times$ & Mixed \\
+\texttt{congr\,with}
+  & \checkmark & $\times$ & \checkmark & Mixed \\
+\texttt{ext1}
+  & $\times$ & \checkmark & \checkmark & Mixed \\
+\texttt{lift}
+  & $\times$ & $\times$ & $\times$ & Always fails \\
+\texttt{measurability}
+  & $\times$ & $\times$ & $\times$ & Always fails \\
+\texttt{any\_goals}
+  & \checkmark & \checkmark & $\times$ & Mixed \\
+\texttt{by\_cases}
+  & \checkmark & \checkmark & $\times$ & Mixed \\
+\texttt{congrm}
+  & $\times$ & $\times$ & $\times$ & Always fails \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{finding}[The type-gated / architecture dichotomy]%
+\label{find:dichotomy}
+Schemas partition into two groups:
+\begin{itemize}
+\item \textbf{Type-gated} (\texttt{lift}, \texttt{measurability},
+  \texttt{congrm}): require specific type-theoretic structures
+  (CanLift instances, $\sigma$-algebra predicates, composite
+  operator skeletons) that exist only in measure-theoretic areas.
+  These fail in \emph{every} non-measure-theoretic target---0/9
+  transfers across three areas.
+\item \textbf{Architecture-sensitive}
+  (\texttt{filter\_upwards}, \texttt{congr\,with}, \texttt{ext1},
+  \texttt{any\_goals}, \texttt{by\_cases}): operate on proof
+  structure (decomposition, case-split, extensionality) and
+  transfer when the target has compatible goal shapes.  These
+  succeed 8/15 times, but each schema's success depends on
+  target-specific compatibility.
+\end{itemize}
+\end{finding}
+
+The type-gated group is now confirmed with three independent
+negative results per schema.  Future Yanasse runs should skip
+\texttt{lift}, \texttt{measurability}, and \texttt{congrm}
+for any non-measure-theoretic target, saving ${\sim}30$\% of
+compute.
+
+\paragraph{Why condensed is the hardest target.}
+Condensed mathematics achieves a 20\% success rate versus 40\%
+(RepTheory and SetTheory).  The difference is not
+accidental: condensed proofs are \emph{categorically sequential}
+(one goal at a time, handled by categorical lemma application),
+while both other targets have goals with algebraic or combinatorial
+structure amenable to case-splitting (\texttt{by\_cases}),
+broadcasting (\texttt{any\_goals}), or conditional unfolding.
+
+\begin{itemize}
+\item \texttt{by\_cases} succeeds in RepTheory (morphism triviality
+  split) and SetTheory (infinite/finite dichotomy) but fails in
+  Condensed: no conditional definitions (\texttt{ite}/\texttt{dite})
+  exist to unfold, and no structural dichotomies create two-branch
+  proof architectures.
+\item \texttt{any\_goals} succeeds in RepTheory (heterogeneous
+  sub-goals after decomposition) and SetTheory (arithmetic
+  side-conditions) but fails in Condensed: proofs never have
+  more than one open goal simultaneously.
+\item \texttt{filter\_upwards} fails in both SetTheory and
+  Condensed, but for different reasons: SetTheory has no
+  \texttt{Filter} API (ordinal arithmetic is algebraic);
+  Condensed was \emph{designed} to replace filters with
+  sheaf conditions.
+\end{itemize}
+
+%======================================================================
+\section{The (Head, Modifier) Decomposition: Three-Area Evidence}%
+\label{sec:finding}
+%======================================================================
+
+The (head, modifier) decomposition introduced in Part~1 receives
+its strongest evidence from the three-area comparison of
+\texttt{congr with}:
+
+\begin{finding}[Full schema transfer]\label{find:full_transfer}
+\texttt{congr with x} is the only schema to achieve full head +
+modifier transfer in any target.  It does so only in
+Condensed---the area where the target goal happens to be an
+\emph{equality of constructor-shaped terms in a concrete category},
+matching exactly the goal structure that \texttt{congr} expects.
+In Representation Theory, only the modifier (\texttt{with})
+transferred (the head required adaptation because the goal was
+$\leq$, not $=$).  In Set Theory, both failed at rank-1
+(Cardinal has no extensionality theorem), though a genuine transfer
+existed at rank-3.
+\end{finding}
+
+This finding refines the (head, modifier) decomposition: whether
+the head transfers depends on \emph{goal shape} (equality of
+structured terms), while whether the modifier transfers depends on
+\emph{proof structure} (whether per-component reduction is useful).
+In the most favorable case---goal shape matches \emph{and}
+per-component reduction is useful---the entire schema transfers
+and may even \emph{improve} the existing proof.
+
+%======================================================================
+\section{Failures and Their Diagnoses}\label{sec:failures}
+%======================================================================
+
+The 8 failures share a common meta-diagnosis: condensed
+mathematics was designed to \emph{eliminate} the structures that
+probability-theory tactics operate on.
+
+\begin{description}
+\item[Item 20: \texttt{filter\_upwards}.]
+  Requires \texttt{Filter.Eventually} goals.  Condensed mathematics
+  has zero uses of the \texttt{Filter} API across all 33 Mathlib
+  files.  The top-1 target (\texttt{isDiscrete\_tfae}) proves
+  equivalence of 7 characterizations of discreteness---all
+  categorical (adjunction counit isomorphisms, essential image
+  membership, colimit characterizations).  This is a paradigm
+  incompatibility: condensed math was designed to replace
+  filter-based topology with sheaf conditions.
+
+\item[Item 23: \texttt{all\_goals fun\_prop}.]
+  Requires multiple simultaneous \texttt{Measurable}/\texttt{Continuous}
+  goals.  The target (\texttt{isDiscrete\_tfae}) is a serial
+  \texttt{tfae\_have} chain: never more than one goal open.
+  Only 1~use of \texttt{fun\_prop} exists in all of
+  \texttt{Mathlib/Condensed/}.
+
+\item[Item 24: \texttt{lift}.]
+  Requires \texttt{CanLift} instances (e.g.,
+  $\mathbb{R}_{\geq 0}^\infty \to \mathbb{R}_{\geq 0}$).
+  Condensed has zero \texttt{CanLift} instances, zero
+  \texttt{WithTop}/\texttt{ENat}/\texttt{ENNReal} types.
+  Replicates items~5 (RepTheory) and~14 (SetTheory).
+
+\item[Item 25: \texttt{any\_goals}.]
+  Requires multi-goal batching structure.  The target
+  (\texttt{left\_triangle\_components}) has a single sequential
+  goal at every proof step.  Source dispatches 4 symmetric
+  bilinear-form sub-goals; target has no algebraic branching.
+  Contrast with RepTheory (item~6, success: genuine multi-goal)
+  and SetTheory (item~15, success: arithmetic side-conditions).
+
+\item[Item 26: \texttt{measurability}.]
+  A $\sigma$-algebra closure tactic (\texttt{aesop} with
+  \texttt{@[measurability]} rule set).  Zero measurability goals
+  exist in condensed proofs.  Replicates items~7 (RepTheory)
+  and~16 (SetTheory).
+
+\item[Item 27: \texttt{by\_cases}.]
+  Requires conditional definitions (\texttt{ite}/\texttt{dite})
+  to unfold.  Condensed has zero conditional definitions across
+  all 33 files.  The target (\texttt{counit} naturality) is
+  definitional: \texttt{ext; rfl}.  Contrast with SetTheory
+  (item~17, success: infinite/finite dichotomy) and RepTheory
+  (item~8, limited success: degenerate case split).
+
+\item[Item 28: \texttt{congrm}.]
+  Requires both sides of an equality to share a composite operator
+  skeleton ($\int$, $\prod$, $\in$).  Target goal is an adjunction
+  triangle identity ($f \gg g = \mathbb{1}$)---fundamentally
+  asymmetric (composition vs.\ identity).  Replicates items~9
+  (RepTheory) and~18 (SetTheory).
+
+\item[Item 29: \texttt{split\_ifs}.]
+  Requires \texttt{ite}/\texttt{dite} subexpressions in the goal.
+  Zero \texttt{if-then-else} constructs exist in any condensed
+  definition or proof across all 33 files.  Probability uses
+  \texttt{split\_ifs} for indicator functions, density processes,
+  and truncations---all domain-locked to areas with conditional
+  definitions.
+\end{description}
+
+\paragraph{The common root cause.}
+Six of the eight failures
+(\texttt{filter\_upwards}, \texttt{all\_goals fun\_prop},
+\texttt{lift}, \texttt{measurability}, \texttt{by\_cases},
+\texttt{split\_ifs}) fail because the tactic requires a
+\emph{type-theoretic precondition} that condensed mathematics
+\emph{by design} never satisfies:
+
+\medskip
+\begin{center}\small
+\begin{tabular}{@{}ll@{}}
+\toprule
+Schema & Required structure absent in Condensed \\
+\midrule
+\texttt{filter\_upwards} & \texttt{Filter}/\texttt{Filter.Eventually} \\
+\texttt{all\_goals fun\_prop} & \texttt{Measurable}/\texttt{Continuous} goals \\
+\texttt{lift} & \texttt{CanLift} instances \\
+\texttt{measurability} & \texttt{@[measurability]}-tagged lemmas \\
+\texttt{by\_cases} & Conditional definitions (\texttt{dite}) \\
+\texttt{split\_ifs} & \texttt{ite}/\texttt{dite} subexpressions \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\medskip
+\noindent The remaining two (\texttt{any\_goals}, \texttt{congrm})
+fail for structural reasons: \texttt{any\_goals} requires
+multi-goal proof states that condensed proofs' serial structure
+never produces, and \texttt{congrm} requires symmetric composite
+expressions that categorical morphism equalities lack.
+
+%======================================================================
+\section{Discussion}\label{sec:discussion}
+%======================================================================
+
+\subsection{The 20\% success rate}
+
+The low success rate is informative, not disappointing.  It
+confirms a prediction: when the target area was \emph{designed}
+to eliminate the source area's mathematical vocabulary, only
+schemas that operate at the level of proof \emph{architecture}
+(decomposition into components) rather than proof
+\emph{vocabulary} (filters, $\sigma$-algebras, conditional
+definitions) can transfer.
+
+The 20\% rate is consistent with the taxonomy from Part~1:
+of the 10 schemas, 6 are type-gated (expected to fail), 2
+are structurally sensitive (\texttt{any\_goals},
+\texttt{congrm}---also expected to fail in this target), and
+only 2 (\texttt{congr with}, \texttt{ext1}) are pure
+decomposition patterns compatible with categorical
+equality goals.
+
+\subsection{Convergence to a single target theorem}
+
+Both successful transfers and 6 of the 8 failures target
+one of just two theorems:
+\texttt{topCatAdjunction.left\_triangle\_components} and
+\texttt{isDiscrete\_tfae}.  This convergence reflects the
+small target pool (189 entries): the QAP matcher has limited
+diversity to choose from, and a few high-scoring ``attractor''
+entries dominate.  A larger condensed-mathematics formalization
+would likely yield more diverse targets.
+
+\subsection{The \texttt{set\_option} finding}
+
+The most practically valuable result is P1's discovery that
+\texttt{congr with x} can replace \texttt{ext} without the
+\texttt{set\_option backward.isDefEq.respectTransparency false}
+workaround.  This is not a theoretical observation: it produces
+a compilable, \texttt{sorry}-free proof that is strictly simpler
+than the Mathlib original.
+
+The finding generalizes: any morphism equality in a concrete
+category (TopCat, CompHaus, Profinite) where \texttt{ext} requires
+the transparency override is a candidate for \texttt{congr with}
+replacement.  The QAP-matched rank-2 analogue
+(\texttt{Light/TopCatAdjunction.lean}) has the same proof
+structure and likely benefits from the same replacement---a
+testable prediction.
+
+\subsection{Cost}
+
+The full pipeline for this pair consumed:
+\begin{itemize}
+\item ${\sim}$5 minutes of GPU time per schema (MPS) for analogy
+  matching ($8 \times 189$ comparisons)---the fastest pair in
+  the series.
+\item ${\sim}$6 hours of AI reasoning across 10 semantic adaptation
+  sessions.
+\item ${\sim}$\$80--120 in API cost.
+\end{itemize}
+
+%======================================================================
+\section{Cumulative Results After Three Pairs}\label{sec:cumulative}
+%======================================================================
+
+\begin{table}[h]
+\centering\small
+\caption{Cumulative results across three Yanasse pairs.}
+\label{tab:cumulative}
+\begin{tabular}{@{}lccccl@{}}
+\toprule
+Pair & Schemas & Successes & Rate & Proofs & Pool \\
+\midrule
+Prob $\to$ RepTheory (Part~1)
+  & 10 & 4 & 40\% & 4 & 672 \\
+Prob $\to$ SetTheory (Part~2)
+  & 10 & 4 & 40\% & 6 & 2{,}076 \\
+Prob $\to$ Condensed (Part~3)
+  & 10 & 2 & 20\% & 2 & 189 \\
+\midrule
+\textbf{Total} & \textbf{30} & \textbf{10} & \textbf{33\%}
+  & \textbf{12} & --- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Across 30 schema transfer attempts on 3 target areas, 10 schemas
+succeeded (33\%), producing 12 Lean-verified new proofs.  The
+``Proofs'' column exceeds ``Successes'' for Set Theory because
+item~19 (\texttt{push}) yielded 3 independent proof variants.
+The number of distinct target theorems receiving new proofs is~5:
+
+\begin{enumerate}
+\item \texttt{Coinvariants.le\_comap\_ker} (RepTheory, 2 proofs)
+\item \texttt{$\varepsilon$ToSingle$_0$\_comp\_eq} (RepTheory, 2 proofs)
+\item \texttt{mul\_eq\_left\_iff} (SetTheory, 3 schemas $\to$ 3 proofs)
+\item \texttt{omega0\_lt\_preOmega\_iff} (SetTheory, 1 schema $\to$ 3 variants)
+\item \texttt{left\_triangle\_components} (Condensed, 2 proofs)
+\end{enumerate}
+
+The most valuable individual result across all three papers is
+the \texttt{congr with x} proof of
+\texttt{left\_triangle\_components}, which is the only transfer
+that produces a \emph{strictly better} proof than the Mathlib
+original.
+
+%======================================================================
+\section{Conclusion}\label{sec:conclusion}
+%======================================================================
+
+The Probability $\to$ Condensed pair achieves a 20\% transfer
+success rate, the lowest in the series, confirming that condensed
+mathematics' deliberate elimination of measure-theoretic vocabulary
+creates a hard barrier for most probability-theory schemas.
+
+The positive results are correspondingly more valuable.  The
+transferred \texttt{congr with x} tactic produces a proof that is
+\emph{strictly better} than the Mathlib original---the only such
+result in the series.  The finding that congruence-based
+decomposition can replace extensionality-based decomposition
+while avoiding transparency issues is a concrete, testable
+insight that probability theory's ``go pointwise'' convention
+contributes to condensed mathematics.
+
+Cross-pair comparison across three target areas now confirms
+the type-gated / architecture dichotomy with statistical
+robustness: 0/9 transfers for type-gated schemas, 8/15 for
+architecture-sensitive schemas, with target-specific compatibility
+determining the outcome.  The permanently failing schemas
+(\texttt{lift}, \texttt{measurability}, \texttt{congrm}) can be
+pruned from future non-measure-theoretic runs.
+
+Part~4 will apply the method to \texttt{Probability} $\to$
+\texttt{FieldTheory}, the current target of the running Ralph Loop.
+
+\section*{Acknowledgments}
+
+Named after Horacio Hideki Yanasse.  The Deep Vision matching engine
+was originally developed for chess cognition research; its application
+to formal mathematics was enabled by the domain-independent design of
+\texttt{deep\_vision\_lib.py}.  All computations were performed on a
+MacBook Air (Apple M-series, 32\,GB unified memory) using PyTorch~2.8
+on the MPS backend.
+
+\begin{thebibliography}{99}
+
+\bibitem{yanasse_part1}
+A.~Linhares,
+``Yanasse: Finding new proofs from Deep Vision's analogies --- Part~1:
+Probability Theory $\to$ Representation Theory,''
+ARGO LABS Report for Distribution, April 2026.
+
+\bibitem{yanasse_part2}
+A.~Linhares,
+``Yanasse: Finding new proofs from Deep Vision's analogies --- Part~2:
+Probability Theory $\to$ Set Theory,''
+ARGO LABS Report for Distribution, April 2026.
+
+\bibitem{linhares2024deepvision}
+A.~Linhares,
+``Deep Vision,''
+ARGO LABS Internal Report, 2026.
+
+\bibitem{hofstadter_fluid_1995}
+D.~R.~Hofstadter and the Fluid Analogies Research Group, \emph{Fluid Concepts \& Creative Analogies: Computer Models of the Fundamental Mechanisms of Thought}. New York: Basic Books, 1995.
+
+\bibitem{hofstadter_go_1999}
+D.~R.~Hofstadter, \emph{G\"odel, Escher, Bach: An Eternal Golden Braid}, 20th anniversary ed. New York: Basic Books, 1999.
+
+\bibitem{hofstadter_surfaces_2013}
+D.~R.~Hofstadter and E.~Sander, \emph{Surfaces and Essences: Analogy as the Fuel and Fire of Thinking}. New York: Basic Books, 2013.
+
+\bibitem{linhares_active_2005}
+A.~Linhares, ``An active symbols theory of chess intuition,'' \emph{Minds and Machines}, vol.~15, pp.~131--151, 2005.
+
+\bibitem{linhares_understanding_2007}
+A.~Linhares and P.~Brum, ``Understanding our understanding of strategic scenarios: What role do chunks play?'' \emph{Cognitive Science}, vol.~31, no.~6, pp.~989--1007, 2007.
+
+\bibitem{linhares_questioning_2010}
+A.~Linhares and A.~E.~T.~A.~Freitas, ``Questioning Chase and Simon's (1973) `Perception in Chess','' \emph{New Ideas in Psychology}, vol.~28, no.~1, pp.~64--78, 2010.
+
+\bibitem{linhares_entanglement_2012}
+A.~Linhares, A.~E.~T.~A.~Freitas, A.~Mendes, and J.~S.~Silva, ``Entanglement of perception and reasoning in the combinatorial game of chess,'' \emph{Cognitive Systems Research}, vol.~13, no.~1, pp.~72--86, 2012.
+
+\bibitem{linhares_what_2013}
+A.~Linhares and D.~M.~Chada, ``What is the nature of the mind's pattern-recognition process?'' \emph{New Ideas in Psychology}, vol.~31, no.~2, pp.~108--121, 2013.
+
+\bibitem{linhares_emergence_2014}
+A.~Linhares, ``The emergence of choice: Decision-making and strategic thinking through analogies,'' \emph{Information Sciences}, vol.~259, pp.~36--56, 2014.
+
+\bibitem{linhares_deep_vision}
+A.~Linhares, ``Deep Vision: Seeing the essence of proofs through analogy,'' ARGO LABS Internal Report, 2026.
+
+\bibitem{linhares_wolstenholme_2026}
+A.~Linhares,
+``Deep Vision: A formal proof of Wolstenholme's theorem in Lean~4,''
+ARGO LABS Report for Distribution, 2026.
+
+\bibitem{linhares_sketch_2026}
+A.~Linhares,
+``A sketch of Deep Vision's study of mathematics,''
+ARGO LABS Report for Distribution, 2026.
+
+\bibitem{scholze_condensed_2019}
+P.~Scholze,
+``Lectures on condensed mathematics,''
+Lecture notes, University of Bonn, 2019.
+Available at \url{https://www.math.uni-bonn.de/people/scholze/Condensed.pdf}.
+
+\bibitem{clausen_scholze_complex_2022}
+D.~Clausen and P.~Scholze,
+``Condensed mathematics and complex geometry,''
+Lecture notes, 2022.
+Available at \url{https://people.mpim-bonn.mpg.de/scholze/Complex.pdf}.
+
+\bibitem{mac_lane_categories_1998}
+S.~Mac~Lane,
+\emph{Categories for the Working Mathematician},
+2nd ed., Graduate Texts in Mathematics, vol.~5.
+New York: Springer-Verlag, 1998.
+
+\bibitem{asgeirsson_condensed_2024}
+D.~\'Asgeirsson, R.~Brasca, N.~Castellana, F.~Filipazzi,
+E.~Kudryashov, P.~Lezama, and A.~Topaz,
+``Categorical foundations of formalized condensed mathematics,''
+\emph{J.~Symbolic Logic}, 2024.
+\href{https://arxiv.org/abs/2407.12840}{arXiv:2407.12840}.
+
+\bibitem{asgeirsson_discrete_2024}
+D.~\'Asgeirsson,
+``A formal characterization of discrete condensed objects,''
+2024.
+\href{https://arxiv.org/abs/2410.17847}{arXiv:2410.17847}.
+
+\bibitem{scholze_liquid_2020}
+P.~Scholze,
+``Liquid tensor experiment,''
+Blog post on Xena Project, December 2020.
+
+\bibitem{commelin_lte_2022}
+J.~Commelin, A.~Topaz, et al.,
+``Completion of the Liquid Tensor Experiment,''
+Lean Community Blog, 2022.
+
+\end{thebibliography}
+
+%======================================================================
+% APPENDIX: Full Lean proofs
+%======================================================================
+\newpage
+\appendix
+
+\section{Lean Code: New Proofs}\label{app:lean}
+
+\subsection{Item 21: \texttt{left\_triangle\_components} via
+  \texttt{congr with x} (no \texttt{set\_option})}
+
+\begin{lstlisting}
+import Mathlib.Condensed.TopCatAdjunction
+import Mathlib.Topology.Category.CompactlyGenerated
+
+open Condensed CondensedSet CategoryTheory CompHaus
+
+universe u
+
+-- Transferred proof: congr with x (from Probability)
+-- NOTE: No set_option needed!
+example (Y : CondensedSet.{u}) :
+    condensedSetToTopCat.map
+      (topCatAdjunctionUnit Y) (*$\gg$*)
+      topCatAdjunctionCounit
+        (condensedSetToTopCat.obj Y) =
+          (*$\mathbb{1}$*) _ := by
+  congr with x
+  change Y.obj.map ((*$\mathbb{1}$*) _) x = x
+  simp
+\end{lstlisting}
+
+\newpage
+\subsection{Item 22: \texttt{left\_triangle\_components} via
+  \texttt{ext1 x} (three variants)}
+
+\begin{lstlisting}
+import Mathlib
+
+open CategoryTheory Condensed CondensedSet CompHaus
+
+universe u
+
+-- Variant A: ext1 x + change + simp
+set_option
+    backward.isDefEq.respectTransparency false in
+theorem left_triangle_A (Y : CondensedSet.{u}) :
+    condensedSetToTopCat.map
+      (topCatAdjunctionUnit Y) (*$\gg$*)
+      topCatAdjunctionCounit Y.toTopCat =
+        (*$\mathbb{1}$*) _ := by
+  ext1 x
+  change Y.obj.map ((*$\mathbb{1}$*) _) x = _
+  simp
+
+-- Variant B: ext1 x + change + simp only
+set_option
+    backward.isDefEq.respectTransparency false in
+theorem left_triangle_B (Y : CondensedSet.{u}) :
+    condensedSetToTopCat.map
+      (topCatAdjunctionUnit Y) (*$\gg$*)
+      topCatAdjunctionCounit Y.toTopCat =
+        (*$\mathbb{1}$*) _ := by
+  ext1 x
+  change Y.obj.map ((*$\mathbb{1}$*) _) x = _
+  simp only [FunctorToTypes.map_id_apply,
+    condensedSetToTopCat_obj_carrier,
+    TopCat.hom_id, ContinuousMap.id_apply]
+
+-- Variant C: ext1 x + change + rw + rfl
+set_option
+    backward.isDefEq.respectTransparency false in
+theorem left_triangle_C (Y : CondensedSet.{u}) :
+    condensedSetToTopCat.map
+      (topCatAdjunctionUnit Y) (*$\gg$*)
+      topCatAdjunctionCounit Y.toTopCat =
+        (*$\mathbb{1}$*) _ := by
+  ext1 x
+  change Y.obj.map ((*$\mathbb{1}$*) _) x = _
+  rw [FunctorToTypes.map_id_apply]
+  rfl
+\end{lstlisting}
+
+\end{document}
